@@ -76,10 +76,9 @@ class NativeTests(BaseTestCase):
     @staticmethod
     def runTest():
         """"""
-        disassembly = SolidityContract(
-            "./tests/native_tests.sol",
-            solc_binary=MythrilDisassembler._init_solc_binary("0.5.3"),
-        ).disassembly
+        # The solidity version (0.5.3 at the moment) should be kept in sync with
+        # pragma in ./tests/native_tests.sol
+        disassembly = SolidityContract("./tests/native_tests.sol").disassembly
         account = Account("0x0000000000000000000000000000000000000000", disassembly)
         world_state = WorldState()
         world_state.put_account(account)

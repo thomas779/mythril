@@ -1,19 +1,21 @@
 import logging
 import re
 import solc
+import sys
 import os
 
 from ethereum import utils
-from solc.exceptions import SolcError
 from typing import List, Tuple, Optional
 from mythril.ethereum import util
 from mythril.ethereum.interface.rpc.client import EthJsonRpc
 from mythril.exceptions import CriticalError, CompilerError, NoContractFoundError
 from mythril.support import signatures
-from mythril.support.truffle import analyze_truffle_project
 from mythril.ethereum.evmcontract import EVMContract
 from mythril.ethereum.interface.rpc.exceptions import ConnectionError
 from mythril.solidity.soliditycontract import SolidityContract, get_contracts_from_file
+
+if sys.version_info[1] >= 6:
+    import solcx
 
 log = logging.getLogger(__name__)
 
@@ -30,11 +32,11 @@ class MythrilDisassembler:
         self,
         eth: Optional[EthJsonRpc] = None,
         solc_version: str = None,
-        solc_args: str = None,
+        solc_settings_json: str = None,
         enable_online_lookup: bool = False,
     ) -> None:
         self.solc_binary = self._init_solc_binary(solc_version)
-        self.solc_args = solc_args
+        self.solc_settings_json = solc_settings_json
         self.eth = eth
         self.enable_online_lookup = enable_online_lookup
         self.sigs = signatures.SignatureDB(enable_online_lookup=enable_online_lookup)
@@ -63,18 +65,34 @@ class MythrilDisassembler:
             solc_binary = os.environ.get("SOLC") or "solc"
         else:
             solc_binary = util.solc_exists(version)
-            if solc_binary:
+            if solc_binary and solc_binary != util.solc_exists(
+                "default_ubuntu_version"
+            ):
                 log.info("Given version is already installed")
             else:
-                try:
-                    solc.install_solc("v" + version)
-                    solc_binary = util.solc_exists(version)
-                    if not solc_binary:
-                        raise SolcError()
-                except SolcError:
+                if version.startswith("0.4"):
+                    try:
+                        solc.install_solc("v" + version)
+                    except solc.exceptions.SolcError:
+                        raise CriticalError(
+                            "There was an error when trying to install the specified solc version"
+                        )
+                elif sys.version_info[1] >= 6:
+                    # solcx supports python 3.6+
+                    try:
+                        solcx.install_solc("v" + version)
+                    except solcx.exceptions.SolcError:
+                        raise CriticalError(
+                            "There was an error when trying to install the specified solc version"
+                        )
+                else:
                     raise CriticalError(
-                        "There was an error when trying to install the specified solc version"
+                        "Py-Solc doesn't support 0.5.*. You can switch to python 3.6 which uses solcx."
                     )
+
+                solc_binary = util.solc_exists(version)
+                if not solc_binary:
+                    raise solc.exceptions.SolcError()
 
             log.info("Setting the compiler to %s", solc_binary)
 
@@ -163,13 +181,15 @@ class MythrilDisassembler:
             try:
                 # import signatures from solidity source
                 self.sigs.import_solidity_file(
-                    file, solc_binary=self.solc_binary, solc_args=self.solc_args
+                    file,
+                    solc_binary=self.solc_binary,
+                    solc_settings_json=self.solc_settings_json,
                 )
                 if contract_name is not None:
                     contract = SolidityContract(
                         input_file=file,
                         name=contract_name,
-                        solc_args=self.solc_args,
+                        solc_settings_json=self.solc_settings_json,
                         solc_binary=self.solc_binary,
                     )
                     self.contracts.append(contract)
@@ -177,7 +197,7 @@ class MythrilDisassembler:
                 else:
                     for contract in get_contracts_from_file(
                         input_file=file,
-                        solc_args=self.solc_args,
+                        solc_settings_json=self.solc_settings_json,
                         solc_binary=self.solc_binary,
                     ):
                         self.contracts.append(contract)
@@ -213,16 +233,6 @@ class MythrilDisassembler:
                 )
 
         return address, contracts
-
-    def analyze_truffle_project(self, *args, **kwargs) -> None:
-        """
-        :param args:
-        :param kwargs:
-        :return:
-        """
-        analyze_truffle_project(
-            self.sigs, *args, **kwargs
-        )  # just passthru by passing signatures for now
 
     @staticmethod
     def hash_for_function_signature(func: str) -> str:
